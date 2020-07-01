@@ -6,6 +6,7 @@ import logging
 import requests
 from requests.exceptions import HTTPError
 import os
+import argparse
 
 
 logger = logging.getLogger(__name__)
@@ -15,6 +16,18 @@ formatter = logging.Formatter('in module %(name)s, in func %(funcName)s, '
 stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(formatter)
 logger.addHandler(stream_handler)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='PV parameters to PVGIS')
+    parser.add_argument('--lat', type=float, required=False,
+                        default=50.1,
+                        help='latitude of location')
+    parser.add_argument('--lon', type=float, required=False,
+                        default=14.46,
+                        help='longitude of location')
+    return parser.parse_args()
 
 
 class Writer:
@@ -126,10 +139,10 @@ class PVGIS:
     def get_df_info(df: pd.DataFrame):
         if isinstance(df, pd.DataFrame):
             print(f'df.shape = {df.shape}')
-            print(f'df.isna().any() = {df.isna().any()}')
+            print(f'df.isna().any() = {df.pv.isna().any()}')
             print(f'df.pv.sum() = {df.pv.sum():.2f} kWh/a')
             print('-' * 50)
-            print('df.head()')
+            print('df.head():')
             print(df.head())
 
 
@@ -146,4 +159,5 @@ def main():
 
 
 if __name__ == '__main__':
+    args = parse_args()
     main()
