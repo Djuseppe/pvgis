@@ -1,12 +1,14 @@
-
+import numpy as np
 import pandas as pd
 from datetime import datetime
 from io import StringIO
 import logging
 import requests
 from requests.exceptions import HTTPError
-import os
+import pytz
 import argparse
+from matplotlib import pyplot as plt
+from geopy.geocoders import Nominatim
 
 
 logger = logging.getLogger(__name__)
@@ -15,18 +17,62 @@ formatter = logging.Formatter('in module %(name)s, in func %(funcName)s, '
                               '%(levelname)-8s: [%(filename)s:%(lineno)d] %(message)s')
 stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(formatter)
-logger.addHandler(stream_handler)
+if not len(logger.handlers):
+    logger.addHandler(stream_handler)
+    logger.propagate = False
+
+
+class ArgumentParser:
+    def __init__(self):
+        self.parser = argparse.ArgumentParser(description='PV parameters to PVGIS')
+        self.arg_list = ['lat', 'lon', 'file', 'city']
+        self.coordinate, self.city, self.file = False, False, False
+
+    def parse_args(self):
+        self.parser.add_argument('--lat', type=float, required=False,
+                                 default=None,
+                                 help='latitude of location')
+        self.parser.add_argument('--lon', type=float, required=False,
+                                 default=None,
+                                 help='longitude of location')
+        self.parser.add_argument('--file', type=str, required=False,
+                                 default=None,
+                                 help='file name for saving output data')
+        self.parser.add_argument('--city', type=str, required=False,
+                                 default=None,
+                                 help='city name to locate PV')
+        return self.parser.parse_args()
+
+    def get_args(self):
+        _args = self.parse_args()
+        if _args.lon is not None and _args.lat is not None:
+            self.coordinate = True
+            print(f'lon = {_args.lon} \t lat = {_args.lat}')
+        elif _args.city is not None:
+            self.city = True
+            print(f'city = {_args.city}')
+        if _args.file is not None:
+            self.file = True
+        else:
+            logger.error('Bad args were provided.')
+        return _args
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
         description='PV parameters to PVGIS')
     parser.add_argument('--lat', type=float, required=False,
-                        default=50.1,
+                        default=None,
                         help='latitude of location')
     parser.add_argument('--lon', type=float, required=False,
-                        default=14.46,
+                        default=None,
                         help='longitude of location')
+    parser.add_argument('--file', type=str, required=False,
+                        default='pvgis_output.csv',
+                        help='file name for saving output data')
+    parser.add_argument('--city', type=str, required=False,
+                        default='Prague',
+                        help='city name to locate PV')
     return parser.parse_args()
 
 
@@ -34,23 +80,24 @@ class Writer:
     def __init__(self, file_name):
         self.file_name = file_name
 
-    @property
-    def file_name(self):
-        return self._file_name
+    # @property
+    # def file_name(self):
+    #     return self._file_name
+    #
+    # @file_name.setter
+    # def file_name(self, file_name):
+    #     folder = os.path.split(file_name)[0]
+    #     if folder:
+    #         if not os.path.exists(folder):
+    #             os.mkdir(folder)
+    #
+    #     if os.path.exists(folder):
+    #         self._file_name = file_name
+    #     else:
+    #         self._file_name = None
+    #         logger.error('Folder: {} does not exists.'.format(folder))
 
-    @file_name.setter
-    def file_name(self, file_name):
-        folder = os.path.split(file_name)[0]
-        if folder:
-            if not os.path.exists(folder):
-                os.mkdir(folder)
-
-        if os.path.exists(folder):
-            self._file_name = file_name
-        else:
-            self._file_name = None
-            logger.error('Folder: {} does not exists.'.format(folder))
-
+    # @file_name.getter
     def write(self, df: pd.DataFrame):
         if isinstance(df, pd.DataFrame):
             df.to_csv(self.file_name)
@@ -59,13 +106,28 @@ class Writer:
             logger.error(f'df passed if not pd.DataFrame, but {type(df)}')
 
 
+class CityParser:
+    def __init__(self, city: str):
+        self.city = city
+        locator = Nominatim(user_agent='Feramat_Cybernetics_PVGIS_parser')
+        self.location = locator.geocode(city)
+
+    def get_coordinates(self):
+        return self.location.latitude, self.location.longitude
+
+
 class PVGIS:
     def __init__(
-            self, lat=50.1, lon=14.46, out_format='csv',
+            self, city=None, lat=50.1, lon=14.46, out_format='csv',
             start_year=2015, end_year=2015, slope=0, azimuth=0, peak_power=1, sys_loss=14
     ):
-        self.lat = lat
-        self.lon = lon
+        self.city = city
+        if self.city is not None:
+            _lat, _lon = CityParser(self.city).get_coordinates()
+        else:
+            _lat, _lon = lat, lon
+        self.lat = _lat
+        self.lon = _lon
         self.out_format = out_format
         self.start_year = start_year
         self.end_year = end_year
@@ -106,7 +168,10 @@ class PVGIS:
         except Exception as err:
             logger.error(f'Other error occurred: {err}')
         else:
-            logger.info('Success connection at time {}!'.format(datetime.now().isoformat()))
+            dt = datetime.now(pytz.timezone('Europe/Prague'))
+            logger.info(
+                f"Success connection at time: {dt.strftime(format='%Y-%m-%d %H:%M:%S %z')}!"
+            )
         return response
 
     @staticmethod
@@ -130,34 +195,52 @@ class PVGIS:
         return df_pv
 
     def parse(self):
-        resp = self.make_request()
-        df = self.create_df(StringIO(resp.text))
+        response = self.make_request()
+        df = self.create_df(StringIO(response.text))
+        checker = self._check_coordinates(self._parse_coordinates_api(response.text), (self.lat, self.lon))
+        self._parse_coordinates_api(response.text)
         self.get_df_info(df)
+        if checker:
+            logger.info('Coordinates from API are close to lat and lon.')
+        else:
+            logger.info('Coordinates from API are NOT close to lat and lon!!!')
         return df
+
+    @staticmethod
+    def _parse_coordinates_api(response_text: str):
+        coordinate_list = response_text.split('\t')[1:3]
+        coordinates = (float(coordinate_list[0].split()[0]), float(coordinate_list[1].split()[0]))
+        return coordinates
+
+    @staticmethod
+    def _check_coordinates(coordinate_data: tuple, coordinate_api: tuple):
+        tolerance_array = np.ones(2, dtype=float) * 0.05
+        diff_array = np.abs(np.array(coordinate_data) - np.array(coordinate_api))
+        return any(diff_array <= tolerance_array)
 
     @staticmethod
     def get_df_info(df: pd.DataFrame):
         if isinstance(df, pd.DataFrame):
             print(f'df.shape = {df.shape}')
             print(f'df.isna().any() = {df.pv.isna().any()}')
-            print(f'df.pv.sum() = {df.pv.sum():.2f} kWh/a')
+            print(f'df.pv.sum() = {df.pv.sum():.2f} kWh.a\N{HYPHEN}\N{SUPERSCRIPT ONE}')
             print('-' * 50)
             print('df.head():')
             print(df.head())
 
 
-def main():
-    # pv = PVGIS()
-    # df = pv.parse_data()
-    # print(df.shape)
-    # print(df.sum() / 1e3)
-    # plt.plot(df.pv)
-    # plt.show()
+def main(lat, lon, file_name, city):
+    pv = PVGIS()
+    df = pv.parse()
+    print(df.shape)
+    print(df.sum() / 1e3)
+    plt.plot(df.pv)
+    plt.show()
 
-    writer = Writer(os.path.join('data', 'file.csv'))
-    print()
+    # writer = Writer(os.path.join('data', 'file.csv'))
+    # print()
 
 
-if __name__ == '__main__':
-    args = parse_args()
-    main()
+# if __name__ == '__main__':
+#     args = parse_args()
+#     main(args.lat, args.lon, args.file, args.city)
