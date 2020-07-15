@@ -73,6 +73,12 @@ def parse_args():
     parser.add_argument('--city', type=str, required=False,
                         default='Prague',
                         help='city name to locate PV')
+    parser.add_argument('--f_type', type=str, required=False,
+                        default='excel',
+                        help='Saving file with this type')
+    parser.add_argument('--plot', type=bool, required=False,
+                        default=False,
+                        help='plot result')
     return parser.parse_args()
 
 
@@ -98,9 +104,16 @@ class Writer:
     #         logger.error('Folder: {} does not exists.'.format(folder))
 
     # @file_name.getter
-    def write(self, df: pd.DataFrame):
+    def write_csv(self, df: pd.DataFrame):
         if isinstance(df, pd.DataFrame):
             df.to_csv(self.file_name)
+            logger.info(f'df was successfully written to {self.file_name}')
+        else:
+            logger.error(f'df passed if not pd.DataFrame, but {type(df)}')
+
+    def write_excel(self, df: pd.DataFrame):
+        if isinstance(df, pd.DataFrame):
+            df.to_excel(self.file_name)
             logger.info(f'df was successfully written to {self.file_name}')
         else:
             logger.error(f'df passed if not pd.DataFrame, but {type(df)}')
